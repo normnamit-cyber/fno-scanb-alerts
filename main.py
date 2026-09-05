@@ -302,6 +302,23 @@ def wait_for_window_start():
 # MAIN
 # ---------------------------------------------------------------------------
 
+def stop_feed(sws):
+    """Close the WebSocket connection. Tries the documented method first;
+    falls back to an alternate in case the exact method name ever drifts
+    between SmartApi versions."""
+    for attempt in ("close_connection", "close"):
+        try:
+            getattr(sws, attempt)()
+            print(f"[info] Feed closed via sws.{attempt}().")
+            return
+        except AttributeError:
+            continue
+        except Exception as e:
+            print(f"[warn] sws.{attempt}() raised: {e}")
+            return
+    print("[warn] Could not find a working close method on sws.")
+
+
 def main():
     smart_api, auth_token, feed_token = login()
 
@@ -330,7 +347,7 @@ def main():
             builder.on_tick(token, price, now)
             done = builder.maybe_run_scan_b(now, contracts)
             if done:
-                wsapp.close_connection()
+                stop_feed(sws)
         except Exception as e:
             print(f"[warn] on_data error: {e}")
 
