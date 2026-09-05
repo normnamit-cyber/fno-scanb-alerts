@@ -21,6 +21,7 @@ fresh each weekday afternoon by a systemd timer.
 
 import os
 import time
+import socket
 import pyotp
 import requests
 from collections import deque
@@ -28,6 +29,11 @@ from datetime import datetime, timedelta, timezone
 
 from SmartApi import SmartConnect
 from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+
+# Without this, a network call that never gets a response (or a silently
+# blocked connection) can hang forever with no error message. This forces
+# any such hang to give up and raise a clear error after 30 seconds instead.
+socket.setdefaulttimeout(30)
 
 # ---------------------------------------------------------------------------
 # CONFIG
@@ -59,9 +65,18 @@ INSTRUMENT_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/
 # ---------------------------------------------------------------------------
 
 def login():
-    smart_api = SmartConnect(api_key=ANGEL_API_KEY)
-    totp = pyotp.TOTP(ANGEL_TOTP_SECRET).now()
-    data = smart_api.generateSession(ANGEL_CLIENT_CODE, ANGEL_PIN, totp)
+    print("[info] Attempting Angel One login...")
+    try:
+        smart_api = SmartConnect(api_key=ANGEL_API_KEY)
+        totp = pyotp.TOTP(ANGEL_TOTP_SECRET).now()
+        data = smart_api.generateSession(ANGEL_CLIENT_CODE, ANGEL_PIN, totp)
+    except (socket.timeout, requests.exceptions.RequestException) as e:
+        print(f"[error] Login request timed out or failed at the network level: {e}")
+        print("[error] This can mean Angel One's servers didn't respond to this "
+              "connection at all — possibly blocking/throttling requests from "
+              "GitHub's servers specifically. We'll know for sure once we see "
+              "this exact message.")
+        raise
     if not data.get("status"):
         raise RuntimeError(f"Angel One login failed: {data}")
     auth_token = data["data"]["jwtToken"]
@@ -113,6 +128,10 @@ def build_watchlist(instrument_master, smart_api):
       - PE watched = largest strike strictly BELOW current spot
     Spot is read right now (~2:40pm), so strikes reflect the afternoon
     price, not a stale morning snapshot.
+
+    Prints progress every 10 underlyings and gives up on any remaining
+    ones after a time budget, so a single slow/stuck request can't hang
+    the whole job.
     Returns { symboltoken: {"tradingsymbol":..., "underlying":..., "strike":...,
                              "type": "CE"/"PE"} }
     """
@@ -120,7 +139,18 @@ def build_watchlist(instrument_master, smart_api):
     underlyings = get_all_fo_underlyings(instrument_master)
     print(f"[info] Discovered {len(underlyings)} F&O underlyings (stocks + indices).")
 
-    for name in underlyings:
+    start_time = time.time()
+    time_budget_secs = 240  # 4 minutes max for building the whole watchlist
+
+    for idx, name in enumerate(underlyings, start=1):
+        if idx % 10 == 0 or idx == 1:
+            print(f"[info] Building watchlist... {idx}/{len(underlyings)} ({name})")
+        if time.time() - start_time > time_budget_secs:
+            print(f"[warn] Time budget exceeded while building watchlist — "
+                  f"stopping early at {idx}/{len(underlyings)}. "
+                  f"Continuing with what we have so far.")
+            break
+
         option_rows = [
             r for r in instrument_master
             if r.get("name") == name and r.get("exch_seg") == "NFO"
