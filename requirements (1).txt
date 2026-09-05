@@ -1,0 +1,4 @@
+smartapi-python
+pyotp
+requests
+websocket-client
