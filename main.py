@@ -146,7 +146,7 @@ def build_watchlist(instrument_master, smart_api):
         if spot is None:
             continue
 
-        strikes = sorted(set(int(r["strike"]) / 100 for r in chain))
+        strikes = sorted(set(float(r["strike"]) / 100 for r in chain))
         if not strikes:
             continue
 
@@ -160,7 +160,7 @@ def build_watchlist(instrument_master, smart_api):
             continue
 
         for r in chain:
-            strike_val = int(r["strike"]) / 100
+            strike_val = float(r["strike"]) / 100
             is_ce_target = strike_val == ce_strike and r["symbol"].endswith("CE")
             is_pe_target = strike_val == pe_strike and r["symbol"].endswith("PE")
             if is_ce_target or is_pe_target:
